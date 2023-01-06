@@ -1,15 +1,16 @@
-// use futures::StreamExt;
+mod actor;
+pub mod client;
+mod handle;
+mod message;
 use std::net::SocketAddr;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
-use tokio::sync::broadcast;
 use warp::Filter;
+
+use crate::client::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), tokio::io::Error> {
-    let (tx, _rx) = broadcast::channel::<(SocketAddr, String)>(100);
     let addr: SocketAddr = SocketAddr::new(
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
         8001,
     );
 
@@ -24,40 +25,29 @@ async fn main() -> Result<(), tokio::io::Error> {
             format!("Hello, {}!", name.unwrap_or_else(|| "world".to_string()))
         });
 
-    let server = warp::serve(hello).try_bind(addr);
+    let server = warp::serve(hello).run(addr);
     println!("Listening to {}", addr);
-    server.await;
+    // tokio::spawn(async move {server.await; });
 
-    // Connect to a peer
-    let mut stream = TcpStream::connect(addr).await?;
-
-    let tx = tx.clone();
-    let mut rx = tx.subscribe();
-
+    // lets test with 1 client first, then test with the list of peers in a loop
+    // tokio::spawn(async move {
+    //     let client = Client::new("127.0.0.1:8002".to_owned()).await;
+    //     println!("Connecting to {}", 8002);
+    //     let res = client.start().await;
+    //     if let Err(e) = res {
+    //         println!("Error: {}", e);
+    //     }
+    // });
+    let client = Client::new("127.0.0.1:8002".to_owned()).await;
+    println!("Connecting to {}", 8002);
     tokio::spawn(async move {
-        let (reader, mut writer) = stream.split();
-        let mut reader = BufReader::new(reader);
-
-        loop {
-            let mut buffer = String::new();
-            tokio::select! {
-                // handle inbound messages
-                msg = rx.recv() => {
-                    let (other_addr, msg) = msg.unwrap();
-                    if other_addr != addr {
-                        writer.write_all(format!("{}: {}", other_addr, msg).as_bytes()).await.unwrap();
-                    }
-                }
-                // handle outbound messages,
-                result = reader.read_line(&mut buffer) => {
-                    if result.is_err() || buffer.trim() == "exit" {
-                        println!("Disconnected, {}", addr);
-                        break;
-                    }
-                    tx.send((addr, buffer)).unwrap();
-                }
-            }
+        let res = client.start().await;
+        if let Err(e) = res {
+            println!("Error: {}", e);
         }
     });
+
+    server.await;
+
     Ok(())
 }
